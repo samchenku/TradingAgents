@@ -6,6 +6,23 @@ import os
 from .config import get_config, DATA_DIR
 
 
+def _prepare_price_data(data: pd.DataFrame) -> pd.DataFrame:
+    """Normalize downloaded OHLCV data before indicator calculation."""
+    prepared = data.copy()
+    prepared["Date"] = pd.to_datetime(prepared["Date"], errors="coerce")
+    prepared = prepared.dropna(subset=["Date"])
+    return prepared
+
+
+def filter_financials_by_date(data: pd.DataFrame, curr_date: str) -> pd.DataFrame:
+    """Drop financial statement columns that occur after curr_date."""
+    if not curr_date or data.empty:
+        return data
+    cutoff = pd.Timestamp(curr_date)
+    mask = pd.to_datetime(data.columns, errors="coerce") <= cutoff
+    return data.loc[:, mask]
+
+
 class StockstatsUtils:
     @staticmethod
     def get_stock_stats(
@@ -20,6 +37,7 @@ class StockstatsUtils:
         # Get config and set up data directory path
         config = get_config()
         online = config["data_vendors"]["technical_indicators"] != "local"
+        curr_date = pd.to_datetime(curr_date)
 
         df = None
         data = None
@@ -32,13 +50,11 @@ class StockstatsUtils:
                         f"{symbol}-YFin-data-2015-01-01-2025-03-25.csv",
                     )
                 )
-                df = wrap(data)
             except FileNotFoundError:
                 raise Exception("Stockstats fail: Yahoo Finance data not fetched yet!")
         else:
             # Get today's date as YYYY-mm-dd to add to cache
             today_date = pd.Timestamp.today()
-            curr_date = pd.to_datetime(curr_date)
 
             end_date = today_date
             start_date = today_date - pd.DateOffset(years=15)
@@ -68,9 +84,12 @@ class StockstatsUtils:
                 data = data.reset_index()
                 data.to_csv(data_file, index=False)
 
-            df = wrap(data)
-            df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
-            curr_date = curr_date.strftime("%Y-%m-%d")
+        data = _prepare_price_data(data)
+        data = data[data["Date"] <= curr_date]
+
+        df = wrap(data)
+        df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
+        curr_date = curr_date.strftime("%Y-%m-%d")
 
         df[indicator]  # trigger stockstats to calculate the indicator
         matching_rows = df[df["Date"].str.startswith(curr_date)]
